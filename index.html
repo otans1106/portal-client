@@ -58,6 +58,23 @@
             box-shadow: 0 0 0 3px #3b82f6; 
         }
 
+        /* Mode proteksi: cegah select & callout gambar */
+        body.protected-mode img,
+        body.protected-mode .watermark-layer {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-user-drag: none;
+        }
+
+        #protectionBlackout {
+            position: fixed;
+            inset: 0;
+            background: #000;
+            z-index: 9999;
+        }
+
         /* Triangle untuk tooltip */
         .tooltip-triangle {
             position: absolute;
@@ -73,6 +90,9 @@
     <script src="pengaturan.js"></script>
 </head>
 <body class="text-slate-800 dark:text-slate-200 bg-slate-50 dark:bg-slate-900 pb-32 flex flex-col min-h-screen">
+
+    <!-- Blackout Overlay: muncul saat window kehilangan fokus (mis. Snipping Tool) -->
+    <div id="protectionBlackout" class="hidden"></div>
 
     <header class="bg-white dark:bg-slate-800 shadow-sm border-b border-slate-200 dark:border-slate-700 sticky top-0 z-40 transition-colors duration-300">
         <div class="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
@@ -305,8 +325,9 @@
         </div>
         <button onclick="prevPhoto(event)" class="absolute left-2 md:left-6 top-1/2 -translate-y-1/2 w-10 h-10 md:w-14 md:h-14 bg-black/50 hover:bg-white/20 text-white rounded-full flex items-center justify-center text-xl md:text-2xl z-50 transition hidden md:flex"><i class="fa-solid fa-chevron-left"></i></button>
         <button onclick="nextPhoto(event)" class="absolute right-2 md:right-6 top-1/2 -translate-y-1/2 w-10 h-10 md:w-14 md:h-14 bg-black/50 hover:bg-white/20 text-white rounded-full flex items-center justify-center text-xl md:text-2xl z-50 transition hidden md:flex"><i class="fa-solid fa-chevron-right"></i></button>
-        <div class="w-full h-full flex items-center justify-center p-2 pb-32 md:pb-24 pointer-events-none">
-            <img id="lightboxImg" src="" class="max-w-full max-h-full object-contain rounded-md shadow-2xl transition-all duration-200 ease-in-out pointer-events-auto select-none opacity-100 transform scale-100">
+        <div class="relative w-full h-full flex items-center justify-center p-2 pb-32 md:pb-24 pointer-events-none">
+            <img id="lightboxImg" src="" draggable="false" class="max-w-full max-h-full object-contain rounded-md shadow-2xl transition-all duration-200 ease-in-out pointer-events-auto select-none opacity-100 transform scale-100">
+            <div id="lightboxWatermark" class="watermark-layer hidden absolute inset-0 z-20 pointer-events-none"></div>
         </div>
         <div class="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-3 w-11/12 max-w-md z-50">
             <p class="text-white/50 text-xs md:hidden text-center mb-[-5px] animate-pulse"><i class="fa-solid fa-arrows-left-right"></i> <span data-i18n="swipe">Geser kiri/kanan</span></p>
@@ -327,8 +348,70 @@
             selectedMap: new Map(), 
             notes: {}, currentPage: 1, kuota: null, 
             viewMode: 'all', sortOrder: 'default', lang: 'id',
-            gridMode: 2 
+            gridMode: 2,
+            wmMode: false, protMode: false
         };
+
+        // ===== WATERMARK & PROTECTION HELPERS =====
+        function getVendorName() {
+            return (typeof CONFIG_APP !== 'undefined' && CONFIG_APP.namaVendor) ? CONFIG_APP.namaVendor : 'Studio Foto';
+        }
+
+        let watermarkDataUri = null;
+        function getWatermarkDataUri() {
+            if (watermarkDataUri) return watermarkDataUri;
+            const text = getVendorName();
+            const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='260' height='150'>` +
+                `<text x='130' y='80' transform='rotate(-28 130 80)' font-family='Inter, Arial, sans-serif' ` +
+                `font-size='20' font-weight='700' fill='rgba(255,255,255,0.32)' text-anchor='middle'>${text}</text>` +
+                `</svg>`;
+            watermarkDataUri = `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+            return watermarkDataUri;
+        }
+
+        function createWatermarkLayer(extraClass = '') {
+            const layer = document.createElement('div');
+            layer.className = `watermark-layer absolute inset-0 z-20 pointer-events-none ${extraClass}`;
+            layer.style.backgroundImage = getWatermarkDataUri();
+            layer.style.backgroundRepeat = 'repeat';
+            return layer;
+        }
+
+        function initProtection() {
+            if (!appState.protMode) return;
+
+            document.body.classList.add('protected-mode');
+
+            // Blokir klik kanan (save image as / inspect)
+            document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            // Blokir drag foto keluar (mencegah save via drag)
+            document.addEventListener('dragstart', (e) => {
+                if (e.target && e.target.tagName === 'IMG') e.preventDefault();
+            });
+
+            // Blokir beberapa kombinasi shortcut umum (save/print/devtools)
+            document.addEventListener('keydown', (e) => {
+                const k = e.key;
+                const blockCombo = (e.ctrlKey || e.metaKey) && ['s', 'p', 'u'].includes(k.toLowerCase());
+                const blockDevtools = k === 'F12' || ((e.ctrlKey || e.metaKey) && e.shiftKey && ['i', 'j', 'c'].includes(k.toLowerCase()));
+                if (blockCombo || blockDevtools || k === 'PrintScreen') {
+                    e.preventDefault();
+                    showAlert(TRANSLATIONS[appState.lang]?.alertProtected || 'Fitur ini dinonaktifkan untuk proteksi konten.', 'error');
+                }
+            });
+
+            // Blackout saat window kehilangan fokus (mis. membuka Snipping Tool / aplikasi lain)
+            const blackout = document.getElementById('protectionBlackout');
+            const showBlackout = () => blackout && blackout.classList.remove('hidden');
+            const hideBlackout = () => blackout && blackout.classList.add('hidden');
+
+            window.addEventListener('blur', showBlackout);
+            window.addEventListener('focus', hideBlackout);
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) showBlackout(); else hideBlackout();
+            });
+        }
 
         const TRANSLATIONS = {
             id: {
@@ -368,6 +451,7 @@
                 btnSelected: "Terpilih",
                 notePlaceholder: "Catatan edit (opsional), misal: hapus jerawat...",
                 alertLimit: "Batas maksimal limit foto telah tercapai!",
+                alertProtected: "Fitur ini dinonaktifkan untuk proteksi konten.",
                 alertEmpty: "Belum ada foto yang dipilih.",
                 alertCopy: "List foto disalin! Silahkan paste di WhatsApp.",
                 gridTip: "Ubah Baris Foto",
@@ -410,6 +494,7 @@
                 btnSelected: "Selected",
                 notePlaceholder: "Edit notes (optional), e.g., remove blemishes...",
                 alertLimit: "Maximum photo limit has been reached!",
+                alertProtected: "This feature is disabled to protect the content.",
                 alertEmpty: "No photos selected yet.",
                 alertCopy: "List copied! Please paste it in WhatsApp.",
                 gridTip: "Change Grid Rows",
@@ -480,6 +565,9 @@
             const urlName = urlParams.get('n');
             const urlKuota = urlParams.get('k');
             const autoId = urlParams.get('i');
+            appState.wmMode = urlParams.get('wm') === '1';
+            appState.protMode = urlParams.get('prot') === '1';
+            initProtection();
 
             if (urlName) {
                 appState.clientName = decodeURIComponent(urlName).replace(/-/g, ' ');
@@ -869,7 +957,13 @@
                 img.src = photo.url; 
                 img.className = "w-full h-full object-cover cursor-pointer transition-transform duration-300"; 
                 img.loading = "lazy";
+                img.draggable = false;
                 img.onclick = () => toggleSelect(photo, card);
+                card.appendChild(img);
+
+                if (appState.wmMode) {
+                    card.appendChild(createWatermarkLayer());
+                }
                 
                 const overlay = document.createElement('div');
                 overlay.className = "selected-overlay absolute inset-0 bg-slate-900/10 dark:bg-black/20 z-10 flex items-start justify-end p-2 pointer-events-none";
@@ -904,7 +998,7 @@
                 zoomBtn.onclick = (e) => { e.stopPropagation(); openLightbox(targetIndex); };
 
                 bottomArea.appendChild(nameText); bottomArea.appendChild(zoomBtn);
-                card.appendChild(img); card.appendChild(overlay); card.appendChild(bottomArea);
+                card.appendChild(overlay); card.appendChild(bottomArea);
                 grid.appendChild(card);
             });
             renderPagination(photosToProcess.length);
@@ -1052,6 +1146,17 @@
             const lightbox = document.getElementById('lightbox');
             const imgEl = document.getElementById('lightboxImg');
             const isCurrentlyOpen = !lightbox.classList.contains('hidden');
+
+            const wmEl = document.getElementById('lightboxWatermark');
+            if (wmEl) {
+                if (appState.wmMode) {
+                    wmEl.style.backgroundImage = getWatermarkDataUri();
+                    wmEl.style.backgroundRepeat = 'repeat';
+                    wmEl.classList.remove('hidden');
+                } else {
+                    wmEl.classList.add('hidden');
+                }
+            }
 
             const photosToProcess = appState.viewMode === 'selected' ? Array.from(appState.selectedMap.values()) : appState.photos;
 
